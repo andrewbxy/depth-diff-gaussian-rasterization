@@ -29,6 +29,7 @@ namespace FORWARD
 		const float* opacities,
 		const float* shs,
 		bool* clamped,
+		const float* deformation_table,
 		const float* cov3D_precomp,
 		const float* colors_precomp,
 		const float* viewmatrix,
@@ -45,6 +46,7 @@ namespace FORWARD
 		float4* conic_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
+		float* deform,
 		bool prefiltered);
 
 	// Main rasterization method.
@@ -57,11 +59,13 @@ namespace FORWARD
 		const float* features,
 		const float* depth,
 		const float4* conic_opacity,
+		const float* deform,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,
 		float* out_color,
-		float* out_depth);
+		float* out_depth,
+		float* out_deform);
 }
 
 

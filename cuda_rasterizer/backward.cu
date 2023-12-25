@@ -362,6 +362,8 @@ __global__ void preprocessCUDA(
 	float* dL_ddepth,
 	float* dL_dcov3D,
 	float* dL_dsh,
+	float* dL_ddeform,
+
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot)
 {
@@ -399,9 +401,20 @@ __global__ void preprocessCUDA(
 	dL_dmean2.y = (view[6] - view[7] * mul3) * dL_ddepth[idx];
 	dL_dmean2.z = (view[10] - view[11] * mul3) * dL_ddepth[idx];
 
+
+
+
+
 	// That's the third part of the mean gradient.
 	dL_dmeans[idx] += dL_dmean2;
 	
+	// glm::vec3 dL_dmean3;
+	// float mul4 = view[2] * m.x + view[6] * m.y + view[10] * m.z + view[14];
+	// dL_dmean3.x = (view[2] - view[3] * mul4) * dL_ddeform[idx];
+	// dL_dmean3.y = (view[6] - view[7] * mul4) * dL_ddeform[idx];
+	// dL_dmean3.z = (view[10] - view[11] * mul4) * dL_ddeform[idx];
+
+	// dL_dmeans[idx] += dL_dmean3;
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means, *campos, shs, clamped, (glm::vec3*)dL_dcolor, (glm::vec3*)dL_dmeans, (glm::vec3*)dL_dsh);
@@ -422,16 +435,21 @@ renderCUDA(
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
 	const float* __restrict__ colors,
-	const float* __restrict__ depths,
+	const float* __restrict__ depths,	
+	const float* __restrict__ deforms,
 	const float* __restrict__ final_Ts,
 	const uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ dL_dpixels,
 	const float* __restrict__ dL_dpixel_depths,
+	const float* __restrict__ dL_dpixel_deforms,
+	
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
-	float* __restrict__ dL_ddepths)
+	float* __restrict__ dL_ddepths,
+	float* __restrict__ dL_ddeforms
+)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -455,6 +473,7 @@ renderCUDA(
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float collected_depths[BLOCK_SIZE];
+	__shared__ float collected_deforms[BLOCK_SIZE];
 
 	// In the forward, we stored the final value for T, the
 	// product of all (1 - alpha) factors. 
@@ -470,16 +489,20 @@ renderCUDA(
 	float dL_dpixel[C];
 	float dL_dpixel_depth;
 	float accum_depth_rec = 0;
+	
+	float dL_dpixel_deform;
+	float accum_deform_rec = 0;
 	if (inside){
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
 		dL_dpixel_depth = dL_dpixel_depths[pix_id];
+		dL_dpixel_deform = dL_dpixel_deforms[pix_id];
 	}
 
 	float last_alpha = 0;
 	float last_color[C] = { 0 };
 	float last_depth = 0;
-
+	float last_deform = 0;
 	// Gradient of pixel coordinate w.r.t. normalized 
 	// screen-space viewport corrdinates (-1 to 1)
 	const float ddelx_dx = 0.5 * W;
@@ -501,6 +524,8 @@ renderCUDA(
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
 			collected_depths[block.thread_rank()] = depths[coll_id];
+			collected_deforms[block.thread_rank()] = deforms[coll_id];
+
 		}
 		block.sync();
 
@@ -529,6 +554,7 @@ renderCUDA(
 			T = T / (1.f - alpha);
 			const float dchannel_dcolor = alpha * T;
 			const float dpixel_depth_ddepth = alpha * T;
+			const float dpixel_deform_ddeform = alpha * T;
 
 			// Propagate gradients to per-Gaussian colors and keep
 			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
@@ -554,6 +580,12 @@ renderCUDA(
 			last_depth = c_d;
 			dL_dalpha += (c_d - accum_depth_rec) * dL_dpixel_depth;
 			atomicAdd(&(dL_ddepths[global_id]), dpixel_depth_ddepth * dL_dpixel_depth);
+// 
+			const float m_d = collected_deforms[j];
+			accum_deform_rec = last_alpha * last_deform + (1.f - last_alpha) * accum_deform_rec;
+			last_deform = m_d;
+			// dL_dalpha += (m_d - accum_deform_rec) * dL_dpixel_deform;
+			atomicAdd(&(dL_ddeforms[global_id]), dpixel_deform_ddeform * dL_dpixel_deform);
 
 			dL_dalpha *= T;
 			// Update last alpha (to be used in the next iteration)
@@ -611,8 +643,10 @@ void BACKWARD::preprocess(
 	float* dL_ddepth,
 	float* dL_dcov3D,
 	float* dL_dsh,
+	float* dL_ddeform,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot
+	)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
 	// Somewhat long, thus it is its own kernel rather than being part of 
@@ -643,6 +677,7 @@ void BACKWARD::preprocess(
 		clamped,
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
+
 		scale_modifier,
 		viewmatrix,
 		projmatrix,
@@ -653,8 +688,10 @@ void BACKWARD::preprocess(
 		dL_ddepth,
 		dL_dcov3D,
 		dL_dsh,
+		dL_ddeform,
 		dL_dscale,
-		dL_drot);
+		dL_drot
+		);
 }
 
 void BACKWARD::render(
@@ -667,15 +704,18 @@ void BACKWARD::render(
 	const float4* conic_opacity,
 	const float* colors,
 	const float* depths,
+	const float* deform,
 	const float* final_Ts,
 	const uint32_t* n_contrib,
 	const float* dL_dpixels,
 	const float* dL_dpixel_depths,
+	const float* dL_dpixel_deforms,
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
 	float* dL_dcolors,
-	float* dL_ddepths)
+	float* dL_ddepths,
+	float* dL_ddeforms)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -686,14 +726,17 @@ void BACKWARD::render(
 		conic_opacity,
 		colors,
 		depths,
+		deform,
 		final_Ts,
 		n_contrib,
 		dL_dpixels,
 		dL_dpixel_depths,
+		dL_dpixel_deforms,
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
 		dL_dcolors,
-		dL_ddepths
+		dL_ddepths,
+		dL_ddeforms
 		);
 }
