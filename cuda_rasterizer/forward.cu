@@ -170,6 +170,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float tan_fovx, float tan_fovy,
 	const float focal_x, float focal_y,
 	int* radii,
+	float* corr_map,
 	float2* points_xy_image,
 	float* depths,
 	float* cov3Ds,
@@ -249,6 +250,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
 	radii[idx] = my_radius;
+	corr_map[idx * 2] = point_image.x;
+	corr_map[idx * 2 + 1] = point_image.y;
 	points_xy_image[idx] = point_image;
 	// Inverse 2D covariance and opacity neatly pack into one float4
 	conic_opacity[idx] = { conic.x, conic.y, conic.z, opacities[idx] };
@@ -425,6 +428,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float focal_x, float focal_y,
 	const float tan_fovx, float tan_fovy,
 	int* radii,
+	float* corr_map,
 	float2* means2D,
 	float* depths,
 	float* cov3Ds,
@@ -452,6 +456,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
 		radii,
+		corr_map,
 		means2D,
 		depths,
 		cov3Ds,

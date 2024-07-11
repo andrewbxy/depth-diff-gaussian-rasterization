@@ -217,6 +217,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	float* out_color,
 	float* out_depth,
+	float* corr_map,
 	int* radii,
 	bool debug)
 {
@@ -263,6 +264,7 @@ int CudaRasterizer::Rasterizer::forward(
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		radii,
+		corr_map,
 		geomState.means2D,
 		geomState.depths,
 		geomState.cov3D,
