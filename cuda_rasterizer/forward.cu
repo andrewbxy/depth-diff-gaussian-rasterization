@@ -8,7 +8,6 @@
  *
  * For inquiries contact  george.drettakis@inria.fr
  */
-
 #include "forward.h"
 #include "auxiliary.h"
 #include <cooperative_groups.h>
